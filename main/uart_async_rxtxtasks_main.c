@@ -14,6 +14,8 @@
 #include "string.h"
 #include "driver/gpio.h"
 #include "sdkconfig.h"
+#include "driver/usb_serial_jtag.h"
+#include "esp_sleep.h"
 
 // UART
 static const int RX_BUF_SIZE = 1024;
@@ -28,7 +30,6 @@ static const int RX_BUF_SIZE = 1024;
 
 // USB
 #define TAG_USB_RX_CB "USB RX CALLBACK"
-#include "driver/usb_serial_jtag.h"
 
 void init_uart(void) {
     const uart_config_t uart_config = {
@@ -53,6 +54,14 @@ void init_uart(void) {
 #endif
 }
 
+/**
+ * @brief Function to transmit bytes
+ * 
+ * @param[in] logName Tag to use in ESP_LOG
+ * @param[in] port UART port
+ * @param[in] data Pointer to data
+ * @return int bytes transmitted
+ */
 int sendData(const char* logName, uart_port_t port, const char* data)
 {
     const int len = strlen(data);
@@ -61,6 +70,11 @@ int sendData(const char* logName, uart_port_t port, const char* data)
     return txBytes;
 }
 
+/**
+ * @brief UART transmission task, send data every 2 seconds
+ * 
+ * @param arg FreeRTOS argument
+ */
 static void tx_task(void *arg)
 {
     static const char *TX_TASK_TAG = "TX_TASK";
@@ -79,6 +93,11 @@ static void tx_task(void *arg)
     }
 }
 
+/**
+ * @brief UART receive task
+ * 
+ * @param arg FreeRTOS argument
+ */
 static void rx_task(void *arg)
 {
     static const char *RX_TASK_TAG = "RX_TASK";
@@ -105,6 +124,14 @@ static void rx_task(void *arg)
     free(data);
 }
 
+/**
+ * @brief Function to read data from USB until reach a target char
+ * 
+ * @param data[out] Buffer to receive data
+ * @param len[in] Buffer length
+ * @param target[in] target character
+ * @return uint32_t received string length
+ */
 static uint32_t usb_serial_jtag_read_until(uint8_t *data, uint32_t len, char target) {
     uint8_t new_char;
     uint32_t size = 0;
@@ -114,7 +141,7 @@ static uint32_t usb_serial_jtag_read_until(uint8_t *data, uint32_t len, char tar
         return 0;
 
     while(usb_serial_jtag_read_bytes(&new_char, 1, pdMS_TO_TICKS(10))) {
-        if(new_char == '\n')
+        if(new_char == target)
             break;
         data[size++] = new_char;
         if(size == len)
@@ -123,6 +150,11 @@ static uint32_t usb_serial_jtag_read_until(uint8_t *data, uint32_t len, char tar
     return size;
 }
 
+/**
+ * @brief USB receive task
+ * 
+ * @param pvParameters FreeRTOS argument
+ */
 static void usb_task(void *pvParameters) {
     uint8_t data[256];
     int dataLen = 0;
@@ -145,7 +177,10 @@ static void usb_task(void *pvParameters) {
     }
 }
 
-
+/**
+ * @brief Init USB Serial Jtag
+ * 
+ */
 void init_usb_jtag(void) {
     usb_serial_jtag_driver_config_t config = {
         .rx_buffer_size = 256,
@@ -165,7 +200,10 @@ void app_main(void)
     gpio_config(&config);
     init_uart();
     init_usb_jtag();
-    gpio_config(&config);
     xTaskCreate(rx_task, "uart_rx_task", 1024*8, NULL, configMAX_PRIORITIES-1, NULL);
     xTaskCreate(tx_task, "uart_tx_task", 1024*8, NULL, configMAX_PRIORITIES-2, NULL);
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    
+    ESP_LOGE("MAIN", "Starting to sleep");
+    esp_deep_sleep(5000000);
 }
